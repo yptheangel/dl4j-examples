@@ -24,10 +24,13 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.os.Environment;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.RelativeLayout;
 import java.io.File;
@@ -37,12 +40,30 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import android.os.AsyncTask;
 import android.widget.TextView;
+import android.widget.Toast;
+
 import org.datavec.image.loader.NativeImageLoader;
+import org.deeplearning4j.examples.image_recognition_demo.datasetHelper.MnistDataSetIteratorAndroid;
+import org.deeplearning4j.nn.conf.BackpropType;
+import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
+import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
+import org.deeplearning4j.nn.conf.inputs.InputType;
+import org.deeplearning4j.nn.conf.layers.ConvolutionLayer;
+import org.deeplearning4j.nn.conf.layers.DenseLayer;
+import org.deeplearning4j.nn.conf.layers.OutputLayer;
+import org.deeplearning4j.nn.conf.layers.SubsamplingLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
+import org.deeplearning4j.nn.weights.WeightInit;
+import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
 import org.deeplearning4j.util.ModelSerializer;
+import org.nd4j.evaluation.classification.Evaluation;
+import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.api.ndarray.INDArray;
-import org.nd4j.linalg.dataset.api.preprocessor.DataNormalization;
-import org.nd4j.linalg.dataset.api.preprocessor.ImagePreProcessingScaler;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
+import org.nd4j.linalg.learning.config.Nesterovs;
+import org.nd4j.linalg.lossfunctions.LossFunctions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 import java.text.DecimalFormat;
@@ -53,6 +74,8 @@ public class MainActivity extends AppCompatActivity {
     MainActivity.DrawingView drawingView;
     String absolutePath;
     public static INDArray output;
+    private static final Logger log = LoggerFactory.getLogger(MainActivity.class);
+
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -63,11 +86,36 @@ public class MainActivity extends AppCompatActivity {
         drawingView = new MainActivity.DrawingView(this);
         parent.addView(drawingView);
 
+        //Configure what does the Train button do
+        Button train_button = findViewById(R.id.train_button);
+        train_button.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View v){
+                AsyncTaskTrainer trainer = new AsyncTaskTrainer();
+                trainer.execute(absolutePath);
+                Context context = getApplicationContext();
+                Toast.makeText(context, "Model will now start", Toast.LENGTH_SHORT).show();
+                onProgressBar();
+            }
+        });
+
+        //Configure what does the Predict button do
+        Button predict_button = findViewById(R.id.pred_button);
+        predict_button.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View v){
+//                absolutePath = saveDrawing();
+                loadImageFromStorage(absolutePath);
+                onProgressBar();
+                AsyncTaskPredictor runner = new AsyncTaskPredictor();
+                runner.execute(absolutePath);
+            }
+        });
 
     }
 
 
-    private class AsyncTaskRunner extends AsyncTask<String, Integer, INDArray> {
+    private class AsyncTaskPredictor extends AsyncTask<String, Integer, INDArray> {
 
         // Runs in UI before background thread is called
         @Override
@@ -85,8 +133,9 @@ public class MainActivity extends AppCompatActivity {
             //load the model from the raw folder with a try / catch block
             try {
                 // Load the pretrained network.
-                InputStream inputStream = getResources().openRawResource(R.raw.trained_mnist_model);
-                MultiLayerNetwork model = ModelSerializer.restoreMultiLayerNetwork(inputStream);
+                String modelFilename = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/mnist_classifier.zip";
+                MultiLayerNetwork model = ModelSerializer.restoreMultiLayerNetwork(modelFilename);
+                Log.d("Debug", "Model is loaded from "+modelFilename);
 
                 //load the image file to test
                 File f=new File(absolutePath, "drawn_image.jpg");
@@ -94,14 +143,8 @@ public class MainActivity extends AppCompatActivity {
                 //Use the nativeImageLoader to convert to numerical matrix
                 NativeImageLoader loader = new NativeImageLoader(height, width, channels);
 
-                //put image into INDArray
+//                put image into INDArray
                 INDArray image = loader.asMatrix(f);
-
-                //values need to be scaled
-                DataNormalization scalar = new ImagePreProcessingScaler(0, 1);
-
-                //then call that scalar on the image dataset
-                scalar.transform(image);
 
                 //pass through neural net and store it in output array
                 output = model.output(image);
@@ -127,8 +170,8 @@ public class MainActivity extends AppCompatActivity {
 
             //transfer the neural network output to an array
             double[] results = {result.getDouble(0,0),result.getDouble(0,1),result.getDouble(0,2),
-                    result.getDouble(0,3),result.getDouble(0,4),result.getDouble(0,5),result.getDouble(0,6),
-                    result.getDouble(0,7),result.getDouble(0,8),result.getDouble(0,9),};
+                result.getDouble(0,3),result.getDouble(0,4),result.getDouble(0,5),result.getDouble(0,6),
+                result.getDouble(0,7),result.getDouble(0,8),result.getDouble(0,9),};
 
             //find the UI tvs to display the prediction and confidence values
             TextView out1 = findViewById(R.id.prediction);
@@ -143,6 +186,90 @@ public class MainActivity extends AppCompatActivity {
         }
 
     }
+
+    private class AsyncTaskTrainer extends AsyncTask<String, Integer, INDArray>
+    {
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+        }
+
+        @Override
+        protected INDArray doInBackground(String... params) {
+
+            int height = 28;
+            int width = 28;
+            int channels = 1; // single channel for grayscale images
+            int outputNum = 10; // 10 digits classification
+            int batchSize = 54;
+            int nEpochs = 3;
+            double learningRate = 0.001;
+            MultiLayerNetwork model = null;
+
+            int seed = 1234;
+            String modelFilename = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/mnist_classifier.zip";
+            Log.d("Debug","Model will be saved here: "+modelFilename);
+
+            try {
+                Log.d("Debug","Data load and vectorization...");
+                DataSetIterator mnistTrain = new MnistDataSetIteratorAndroid(batchSize,true, seed);
+                DataSetIterator mnistTest = new MnistDataSetIteratorAndroid(batchSize,false, seed);
+
+                Log.d("Debug","Network configuration and training...");
+
+                MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+                    .seed(seed)
+                    .updater(new Nesterovs(learningRate, Nesterovs.DEFAULT_NESTEROV_MOMENTUM))
+                    .weightInit(WeightInit.XAVIER)
+                    .list()
+                    .layer(0, new ConvolutionLayer.Builder(5, 5)
+                        .nIn(channels)
+                        .stride(1, 1)
+                        .nOut(20)
+                        .activation(Activation.IDENTITY)
+                        .build())
+                    .layer(1, new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX)
+                        .kernelSize(2, 2)
+                        .stride(2, 2)
+                        .build())
+                    .layer(2, new DenseLayer.Builder().activation(Activation.RELU)
+                        .nOut(50).build())
+                    .layer(3, new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+                        .nOut(outputNum)
+                        .activation(Activation.SOFTMAX)
+                        .build())
+                    .setInputType(InputType.convolutionalFlat(height, width, 1)) // InputType.convolutional for normal image
+                    .backpropType(BackpropType.Standard)
+                    .build();
+
+                model = new MultiLayerNetwork(conf);
+                model.init();
+                Log.d("Debug","\n"+model.summary());
+
+                model.setListeners(new ScoreIterationListener());
+                for (int i =1; i < nEpochs+1; i++) {
+                    model.fit(mnistTrain);
+
+                    Log.d("Debug","Completed epoch "+ i);
+                    mnistTrain.reset();
+                }
+
+                ModelSerializer.writeModel(model, modelFilename, true);
+                Log.d("Debug","Model Training is Done.");
+
+                Evaluation eval = model.evaluate(mnistTest);
+                Log.d("Debug",eval.stats());
+                mnistTest.reset();
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            offProgressBar();
+            return output;
+        }
+    }
+
     //code for the drawing input
     public class DrawingView extends View {
 
@@ -163,7 +290,8 @@ public class MainActivity extends AppCompatActivity {
             mPaint.setStrokeCap(Paint.Cap.ROUND);
             mPaint.setStrokeWidth(60);
             mPaint.setDither(true);
-            mPaint.setColor(Color.WHITE);
+            mPaint.setColor(Color.MAGENTA);
+//            mPaint.setColor(Color.WHITE);
             mPaint.setStyle(Paint.Style.STROKE);
         }
 
@@ -225,13 +353,12 @@ public class MainActivity extends AppCompatActivity {
                     absolutePath = saveDrawing();
                     invalidate();
                     clear();
-                    loadImageFromStorage(absolutePath);
-                    onProgressBar();
+//                    loadImageFromStorage(absolutePath);
+//                    onProgressBar();
                     //launch the asyncTask now that the image has been saved
-                    AsyncTaskRunner runner = new AsyncTaskRunner();
-                    runner.execute(absolutePath);
+//                    AsyncTaskRunner runner = new AsyncTaskRunner();
+//                    runner.execute(absolutePath);
                     break;
-
             }
             return true;
         }
