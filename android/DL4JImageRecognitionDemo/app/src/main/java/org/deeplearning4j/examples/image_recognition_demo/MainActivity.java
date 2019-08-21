@@ -16,15 +16,19 @@
 
 package org.deeplearning4j.examples.image_recognition_demo;
 
+import android.Manifest;
 import android.content.Context;
-import android.content.ContextWrapper;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.os.Build;
 import android.os.Environment;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
@@ -62,19 +66,17 @@ import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.learning.config.Nesterovs;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.InputStream;
 import java.text.DecimalFormat;
-
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
     MainActivity.DrawingView drawingView;
     String absolutePath;
     public static INDArray output;
-    private static final Logger log = LoggerFactory.getLogger(MainActivity.class);
+    // for permission requests
+    public static final int REQUEST_PERMISSION = 123;
 
 
     @Override
@@ -86,6 +88,19 @@ public class MainActivity extends AppCompatActivity {
         drawingView = new MainActivity.DrawingView(this);
         parent.addView(drawingView);
 
+        // request permission to write data (aka images) to the user's external storage of their phone
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+            && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                REQUEST_PERMISSION);
+        }
+
+        // request permission to read data (aka images) from the user's external storage of their phone
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+            && ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
+                REQUEST_PERMISSION);
+
         //Configure what does the Train button do
         Button train_button = findViewById(R.id.train_button);
         train_button.setOnClickListener(new View.OnClickListener(){
@@ -94,7 +109,7 @@ public class MainActivity extends AppCompatActivity {
                 AsyncTaskTrainer trainer = new AsyncTaskTrainer();
                 trainer.execute(absolutePath);
                 Context context = getApplicationContext();
-                Toast.makeText(context, "Model will now start", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "Model training will now start", Toast.LENGTH_SHORT).show();
                 onProgressBar();
             }
         });
@@ -113,7 +128,6 @@ public class MainActivity extends AppCompatActivity {
         });
 
     }
-
 
     private class AsyncTaskPredictor extends AsyncTask<String, Integer, INDArray> {
 
@@ -202,8 +216,8 @@ public class MainActivity extends AppCompatActivity {
             int width = 28;
             int channels = 1; // single channel for grayscale images
             int outputNum = 10; // 10 digits classification
-            int batchSize = 54;
-            int nEpochs = 3;
+            int batchSize = 100;
+            int nEpochs = 1;
             double learningRate = 0.001;
             MultiLayerNetwork model = null;
 
@@ -215,7 +229,6 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("Debug","Data load and vectorization...");
                 DataSetIterator mnistTrain = new MnistDataSetIteratorAndroid(batchSize,true, seed);
                 DataSetIterator mnistTest = new MnistDataSetIteratorAndroid(batchSize,false, seed);
-
                 Log.d("Debug","Network configuration and training...");
 
                 MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
@@ -248,12 +261,16 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("Debug","\n"+model.summary());
 
                 model.setListeners(new ScoreIterationListener());
+                long start_time=System.nanoTime();
                 for (int i =1; i < nEpochs+1; i++) {
                     model.fit(mnistTrain);
 
                     Log.d("Debug","Completed epoch "+ i);
                     mnistTrain.reset();
                 }
+                long elapsed_time= System.nanoTime()-start_time;
+                long elapsed_time_seconds= TimeUnit.SECONDS.convert(elapsed_time,TimeUnit.NANOSECONDS);
+                Log.d("Debug","Model Training took "+elapsed_time_seconds+" seconds");
 
                 ModelSerializer.writeModel(model, modelFilename, true);
                 Log.d("Debug","Model Training is Done.");
@@ -291,7 +308,6 @@ public class MainActivity extends AppCompatActivity {
             mPaint.setStrokeWidth(60);
             mPaint.setDither(true);
             mPaint.setColor(Color.MAGENTA);
-//            mPaint.setColor(Color.WHITE);
             mPaint.setStyle(Paint.Style.STROKE);
         }
 
@@ -353,11 +369,6 @@ public class MainActivity extends AppCompatActivity {
                     absolutePath = saveDrawing();
                     invalidate();
                     clear();
-//                    loadImageFromStorage(absolutePath);
-//                    onProgressBar();
-                    //launch the asyncTask now that the image has been saved
-//                    AsyncTaskRunner runner = new AsyncTaskRunner();
-//                    runner.execute(absolutePath);
                     break;
             }
             return true;
@@ -368,17 +379,14 @@ public class MainActivity extends AppCompatActivity {
             invalidate();
             System.gc();
         }
-
     }
 
     public String  saveDrawing(){
+        drawingView.destroyDrawingCache();
         drawingView.setDrawingCacheEnabled(true);
         Bitmap b = drawingView.getDrawingCache();
 
-        ContextWrapper cw = new ContextWrapper(getApplicationContext());
-        // set the path to storage
-        File directory = cw.getDir("imageDir", Context.MODE_PRIVATE);
-        // Create imageDir and store the file there. Each new drawing will overwrite the previous
+        File directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         File mypath=new File(directory,"drawn_image.jpg");
 
         //use a fileOutputStream to write the file to the location in a try / catch block
@@ -398,7 +406,6 @@ public class MainActivity extends AppCompatActivity {
         return directory.getAbsolutePath();
     }
 
-
     private void loadImageFromStorage(String path)
     {
 
@@ -406,14 +413,13 @@ public class MainActivity extends AppCompatActivity {
         try {
             File f=new File(path, "drawn_image.jpg");
             Bitmap b = BitmapFactory.decodeStream(new FileInputStream(f));
-            ImageView img=(ImageView)findViewById(R.id.outputView);
+            ImageView img=findViewById(R.id.outputView);
             img.setImageBitmap(b);
         }
         catch (FileNotFoundException e)
         {
             e.printStackTrace();
         }
-
     }
 
     public void onProgressBar(){
