@@ -72,6 +72,7 @@ import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
+    String LOG_TAG = "DEMO_MainActivity";
     MainActivity.DrawingView drawingView;
     String absolutePath;
     public static INDArray output;
@@ -87,15 +88,13 @@ public class MainActivity extends AppCompatActivity {
         RelativeLayout parent = findViewById(R.id.layout2);
         drawingView = new MainActivity.DrawingView(this);
         parent.addView(drawingView);
-
-        // request permission to write data (aka images) to the user's external storage of their phone
+        //request permission to use phone's resources
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
             && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
                 REQUEST_PERMISSION);
         }
 
-        // request permission to read data (aka images) from the user's external storage of their phone
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
             && ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
@@ -107,7 +106,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View v){
                 AsyncTaskTrainer trainer = new AsyncTaskTrainer();
-                trainer.execute(absolutePath);
+                trainer.execute();
                 Context context = getApplicationContext();
                 Toast.makeText(context, "Model training will now start", Toast.LENGTH_SHORT).show();
                 onProgressBar();
@@ -148,7 +147,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 // Load the pretrained network.
                 String modelFilename = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/mnist_classifier.zip";
-                MultiLayerNetwork model = ModelSerializer.restoreMultiLayerNetwork(modelFilename);
+                MultiLayerNetwork model = ModelSerializer.restoreMultiLayerNetwork(modelFilename,false);
                 Log.d("Debug", "Model is loaded from "+modelFilename);
 
                 //load the image file to test
@@ -201,7 +200,7 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-    private class AsyncTaskTrainer extends AsyncTask<String, Integer, INDArray>
+    private class AsyncTaskTrainer extends AsyncTask<Void, Void, Void>
     {
 
         @Override
@@ -210,7 +209,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
-        protected INDArray doInBackground(String... params) {
+        protected Void doInBackground(Void... params) {
 
             int height = 28;
             int width = 28;
@@ -223,13 +222,13 @@ public class MainActivity extends AppCompatActivity {
 
             int seed = 1234;
             String modelFilename = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/mnist_classifier.zip";
-            Log.d("Debug","Model will be saved here: "+modelFilename);
+            Log.d(LOG_TAG,"Model will be saved here: "+modelFilename);
 
             try {
-                Log.d("Debug","Data load and vectorization...");
+                Log.d(LOG_TAG,"Data load and vectorization...");
                 DataSetIterator mnistTrain = new MnistDataSetIteratorAndroid(batchSize,true, seed);
                 DataSetIterator mnistTest = new MnistDataSetIteratorAndroid(batchSize,false, seed);
-                Log.d("Debug","Network configuration and training...");
+                Log.d(LOG_TAG,"Network configuration and training...");
 
                 MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
                     .seed(seed)
@@ -258,32 +257,37 @@ public class MainActivity extends AppCompatActivity {
 
                 model = new MultiLayerNetwork(conf);
                 model.init();
-                Log.d("Debug","\n"+model.summary());
+                Log.d(LOG_TAG,"\n"+model.summary());
 
                 model.setListeners(new ScoreIterationListener());
                 long start_time=System.nanoTime();
                 for (int i =1; i < nEpochs+1; i++) {
                     model.fit(mnistTrain);
 
-                    Log.d("Debug","Completed epoch "+ i);
+                    Log.d(LOG_TAG,"Completed epoch "+ i);
                     mnistTrain.reset();
                 }
                 long elapsed_time= System.nanoTime()-start_time;
                 long elapsed_time_seconds= TimeUnit.SECONDS.convert(elapsed_time,TimeUnit.NANOSECONDS);
-                Log.d("Debug","Model Training took "+elapsed_time_seconds+" seconds");
+                Log.d(LOG_TAG,"Model Training took "+elapsed_time_seconds+" seconds");
 
                 ModelSerializer.writeModel(model, modelFilename, true);
-                Log.d("Debug","Model Training is Done.");
+                Log.d(LOG_TAG,"Model Training is Done.");
 
                 Evaluation eval = model.evaluate(mnistTest);
-                Log.d("Debug",eval.stats());
+                Log.d(LOG_TAG,eval.stats());
                 mnistTest.reset();
+                Log.d(LOG_TAG,"Model Evaluation is Done.");
 
             } catch (IOException e) {
                 e.printStackTrace();
             }
             offProgressBar();
-            return output;
+            return null;
+        }
+
+        protected void onPostExecute(Void result) {
+            super.onPostExecute(result);
         }
     }
 
